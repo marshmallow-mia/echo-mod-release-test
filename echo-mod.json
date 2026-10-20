@@ -4,7 +4,7 @@
   "name": "Example mod",
   "summary": "Logs the game's state changes. A starting point for your own mod.",
   "author": "marshmallow-mia",
-  "version": "0.0.1-beta.1",
+  "version": "0.0.1",
   "kind": "mod",
   "file": "ExampleMod.dll",
   "api": 5,
