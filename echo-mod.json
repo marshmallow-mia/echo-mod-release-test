@@ -1,14 +1,16 @@
 {
   "schema": 1,
-  "id": "example-mod",
+  "id": "release-test",
   "name": "Example mod",
   "summary": "Logs the game's state changes. A starting point for your own mod.",
-  "author": "Your name",
-  "version": "0.1.0",
+  "author": "marshmallow-mia",
+  "version": "0.0.1-beta.1",
   "kind": "mod",
   "file": "ExampleMod.dll",
   "api": 5,
-  "capabilities": ["observes-only"],
+  "capabilities": [
+    "observes-only"
+  ],
   "target": "client",
   "visibility": "public",
   "requires": {
