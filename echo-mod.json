@@ -4,7 +4,7 @@
   "name": "Rehearsal mod",
   "summary": "A test mod for the launcher's end-to-end test of third-party mods. Not for players.",
   "author": "marshmallow-mia",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "kind": "mod",
   "file": "RehearsalMod.dll",
   "api": 5,
@@ -12,7 +12,7 @@
     "observes-only"
   ],
   "target": "client",
-  "visibility": "unlisted",
+  "visibility": "private",
   "requires": {
     "nevr": ">=4.1.0",
     "mods": []
