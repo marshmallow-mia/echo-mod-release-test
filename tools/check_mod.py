@@ -5,14 +5,21 @@ the smoke host found when it loaded the DLL.
     python3 tools/check_mod.py                         # echo-mod.json only
     python3 tools/check_mod.py --dll build/mingw/ExampleMod.dll
     python3 tools/check_mod.py --dll ... --smoke smoke.json --tag v0.1.0
+    python3 tools/check_mod.py --published dist --tag v0.1.0   # a release as package.py made it
+
+--published checks what a release publishes (echo-mod.json, the DLL or the pack's zip,
+SHA256SUMS) by the same rules the echo-mods check and the launcher's catalogue apply to every
+release: the release workflow runs it before it publishes anything.
 
 Exit code 0 when nothing is wrong. Warnings don't fail the check. Python 3.8+, no packages.
 """
 import argparse
+import hashlib
 import json
 import re
 import struct
 import sys
+import zipfile
 from pathlib import Path
 
 # semver.org's own regex for a semantic version (2.0.0).
@@ -50,6 +57,11 @@ RESERVED_IDS = {
     "asset-patches", "xmlhttp-fix", "gpu-rating", "content-overlay", "missing-textures", "server-patches",
     "nevr", "nevr-runtime", "echoxr", "echoxr-hands", "echocombat",
 }
+# Whole families: nEVR's and EchoXR's names, and the launcher's own Nvr*.dll plugins.
+RESERVED_ID_PREFIXES = ("nevr", "echoxr", "echotools")
+RESERVED_FILE_PREFIXES = ("nvr", "nevr", "echoxr")
+# Not published yet: mods for game servers.
+UNPUBLISHED_TARGETS = {"server"}
 
 # Exports nEVR looks up. GetInfo is required; the template exports all of them.
 EXPORTS_REQUIRED = {"NvrPluginGetInfo"}
@@ -113,7 +125,9 @@ def check_range(text):
     return bool(parts) and all(RANGE_PART.match(p) for p in parts)
 
 
-def check_manifest(m, report, root):
+def check_manifest(m, report, root, published=False):
+    """echo-mod.json as it is in the repo (`root` its folder), or, `published`, as package.py
+    filled it in for a release (settings as an object, a pack's zip described in "pack")."""
     def need(key, kind):
         if not isinstance(m.get(key), kind):
             report.error(f"echo-mod.json: \"{key}\" is missing or not a {kind.__name__}")
@@ -127,8 +141,8 @@ def check_manifest(m, report, root):
         if not ID.match(mod_id):
             report.error(f"id \"{mod_id}\": lowercase letters, digits, '.', '-', '_' (at most 64), starting with a "
                          "letter or digit")
-        elif mod_id in RESERVED_IDS:
-            report.error(f"id \"{mod_id}\" is reserved")
+        elif mod_id in RESERVED_IDS or mod_id.startswith(RESERVED_ID_PREFIXES):
+            report.error(f"id \"{mod_id}\" is reserved (nevr*, echoxr* and echotools* are the projects' own)")
     for key in ("name", "summary", "author"):
         value = need(key, str)
         if value is not None and not value.strip():
@@ -148,8 +162,8 @@ def check_manifest(m, report, root):
     if file is not None:
         if not FILE.match(file):
             report.error(f"file \"{file}\": letters, digits, '.', '-', '_', ending in .dll (at most 64)")
-        elif file.lower() in RESERVED_FILES:
-            report.error(f"file \"{file}\" is reserved")
+        elif file.lower() in RESERVED_FILES or file.lower().startswith(RESERVED_FILE_PREFIXES):
+            report.error(f"file \"{file}\" is reserved (Nvr*, nEVR* and EchoXR* are the projects' own)")
     api = m.get("api", 5)
     if api not in (5, 6):
         report.error("\"api\": 5 or 6")
@@ -165,6 +179,9 @@ def check_manifest(m, report, root):
                          "doesn't only observe")
     if m.get("target", "client") not in TARGETS:
         report.error(f"\"target\": one of {sorted(TARGETS)}")
+    elif m.get("target", "client") in UNPUBLISHED_TARGETS:
+        report.error("\"target\": \"server\" isn't published yet (mods for game servers come later): "
+                     "\"client\" or \"both\"")
     if m.get("visibility", "public") not in VISIBILITY:
         report.error(f"\"visibility\": one of {sorted(VISIBILITY)}")
     for flag in ("required", "shipped"):
@@ -193,7 +210,10 @@ def check_manifest(m, report, root):
     if not isinstance(m.get("args", {}), dict):
         report.error("\"args\" must be an object")
     settings = m.get("settings")
-    if settings:
+    if settings and published:
+        if not isinstance(settings, dict):
+            report.error("\"settings\": the release's echo-mod.json carries the settings object")
+    elif settings:
         if not isinstance(settings, str):
             report.error("\"settings\": the path of a <Stem>.plugin.json in the repo")
         else:
@@ -209,6 +229,9 @@ def check_manifest(m, report, root):
         pack = m.get("pack")
         if not isinstance(pack, dict) or not isinstance(pack.get("content"), str) or not ID.match(pack["content"]):
             report.error("a pack needs \"pack\": {\"content\": \"<content id>\"} and content/<content id>/content.json")
+        elif published:
+            if not isinstance(pack.get("file"), str) or not re.match(r"^[A-Za-z0-9._+-]{1,96}\.zip$", pack["file"]):
+                report.error("pack.file: the pack's zip (package.py names it)")
         elif not (root / "content" / pack["content"] / "content.json").is_file():
             report.error(f"content/{pack['content']}/content.json is missing")
 
@@ -318,15 +341,107 @@ def check_smoke(path, manifest, report):
     report.note(f"smoke: {found}")
 
 
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def main_file(manifest):
+    """The file a release publishes: the DLL, or a pack's zip."""
+    if manifest.get("kind", "mod") == "pack":
+        return (manifest.get("pack") or {}).get("file")
+    return manifest.get("file")
+
+
+def check_published(work, tag, prerelease, report):
+    """A release as the release workflow publishes it, in folder `work`: echo-mod.json, the DLL
+    or the pack's zip, SHA256SUMS. `tag` is the release's tag, `prerelease` its GitHub flag.
+    Returns (manifest, the DLL to load-test) -- the DLL None when there is none to test."""
+    work = Path(work)
+    try:
+        manifest = json.loads((work / "echo-mod.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        report.error(f"echo-mod.json: {e}")
+        return None, None
+    if not isinstance(manifest, dict):
+        report.error("echo-mod.json isn't an object")
+        return None, None
+    check_manifest(manifest, report, work, published=True)
+    version = str(manifest.get("version", ""))
+    if tag != f"v{version}":
+        report.error(f"tag {tag} doesn't match echo-mod.json's version: tag v{version}")
+    if SEMVER.match(version) and bool(prerelease) != is_prerelease(version):
+        report.error("the GitHub prerelease flag doesn't match the version: a version with a prerelease part "
+                     "(1.2.0-beta.1) is a prerelease, any other isn't")
+    main = main_file(manifest)
+    if not isinstance(main, str) or not (work / main).is_file():
+        report.error(f"the release lacks {main}, the file its echo-mod.json names")
+        return manifest, None
+    sums = {}
+    try:
+        for line in (work / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                sums[parts[1].lstrip("*")] = parts[0]
+    except OSError:
+        report.error("the release has no SHA256SUMS")
+    digest = sha256(work / main)
+    for name, have in ((main, digest), ("echo-mod.json", sha256(work / "echo-mod.json"))):
+        if sums and sums.get(name) != have:
+            report.error(f"{name} doesn't match SHA256SUMS")
+    want = manifest.get("sha256") if manifest.get("kind", "mod") == "mod" else (manifest.get("pack") or {}).get("sha256")
+    if want != digest:
+        report.error(f"{main} doesn't match the sha256 in echo-mod.json")
+    if manifest.get("kind", "mod") != "pack":
+        return manifest, work / main
+    # A pack: plugins/<file> and content/<content id>/, nothing else, no path out of either.
+    content = str((manifest.get("pack") or {}).get("content", ""))
+    inner = f"plugins/{manifest.get('file')}"
+    try:
+        with zipfile.ZipFile(work / main) as zf:
+            names = zf.namelist()
+            bad = [n for n in names if n.startswith("/") or "\\" in n or ".." in n.split("/")
+                   or not (n.startswith("plugins/") or n.startswith(f"content/{content}/"))]
+            if bad:
+                report.error("the pack has files outside plugins/ and content/<content id>/: " + ", ".join(bad[:5]))
+            if f"content/{content}/content.json" not in names:
+                report.error(f"the pack has no content/{content}/content.json")
+            if inner not in names:
+                report.error(f"the pack has no {inner}")
+                return manifest, None
+            out = work / "unpacked" / "plugins"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / str(manifest["file"])).write_bytes(zf.read(inner))
+            return manifest, out / str(manifest["file"])
+    except zipfile.BadZipFile:
+        report.error(f"{main} isn't a zip")
+        return manifest, None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--manifest", default="echo-mod.json")
     ap.add_argument("--dll", help="the built DLL")
     ap.add_argument("--smoke", help="the smoke host's output (a JSON line)")
     ap.add_argument("--tag", help="the git tag being released: must be v<version>")
+    ap.add_argument("--published", metavar="DIR", help="a release's files as package.py made them (needs --tag)")
     args = ap.parse_args()
 
     report = Report()
+    if args.published:
+        if args.tag is None:
+            ap.error("--published needs --tag")
+        version = json.loads((Path(args.published) / "echo-mod.json").read_text(encoding="utf-8")).get("version", "")
+        manifest, dll = check_published(args.published, args.tag, is_prerelease(str(version)), report)
+        if dll is not None:
+            check_dll(str(dll), manifest, report)
+        if args.smoke and manifest:
+            check_smoke(args.smoke, manifest, report)
+        report.print()
+        return 1 if report.errors else 0
     manifest_path = Path(args.manifest)
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

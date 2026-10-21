@@ -72,7 +72,7 @@ def main():
         with zipfile.ZipFile(out / name, "w") as zf:
             for path, arcname in files:
                 add(zf, path, arcname)
-        entry.pop("file", None)
+        # "file" stays: the plugin in the pack, which nEVR loads.
         entry["pack"] = {
             "file": name,
             "sha256": sha256(out / name),

@@ -36,6 +36,15 @@ jobs:
           file=$(python3 -c 'import json; print(json.load(open("echo-mod.json"))["file"])')
           python3 tools/package.py --dll "build/mingw/$file"
 
+      # What the launcher's catalogue checks for every release, by the template's current rules
+      # (they may be newer than this repo's copy): a release it would refuse is never published.
+      - name: Check the release
+        run: |
+          curl -fsSL -m 30 -o build/check_mod_current.py \
+            https://raw.githubusercontent.com/EchoTools/echo-mod-template-repo/main/tools/check_mod.py \
+            || cp tools/check_mod.py build/check_mod_current.py
+          python3 build/check_mod_current.py --published dist --tag "$GITHUB_REF_NAME" --smoke build/smoke/smoke.json
+
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: dist/*
@@ -46,8 +55,3 @@ jobs:
         run: |
           pre=$(python3 -c 'import json; print("--prerelease" if json.load(open("dist/echo-mod.json"))["prerelease"] else "")')
           gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes --verify-tag $pre
-
-      # Lets the launcher's catalogue pick the release up right away instead of at its next look.
-      - name: Tell the launcher's catalogue
-        continue-on-error: true
-        run: curl -fsS -m 15 -X POST --data-urlencode "repo=$GITHUB_REPOSITORY" https://release.echovr.de/mods/hook || true

@@ -1,18 +1,18 @@
 {
   "schema": 1,
-  "id": "release-test",
-  "name": "Example mod",
-  "summary": "Logs the game's state changes. A starting point for your own mod.",
+  "id": "rehearsal-mod",
+  "name": "Rehearsal mod",
+  "summary": "A test mod for the launcher's end-to-end test of third-party mods. Not for players.",
   "author": "marshmallow-mia",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "kind": "mod",
-  "file": "ExampleMod.dll",
+  "file": "RehearsalMod.dll",
   "api": 5,
   "capabilities": [
     "observes-only"
   ],
   "target": "client",
-  "visibility": "public",
+  "visibility": "unlisted",
   "requires": {
     "nevr": ">=4.1.0",
     "mods": []
@@ -21,5 +21,5 @@
   "license": "MIT",
   "homepage": "",
   "args": {},
-  "settings": "ExampleMod.plugin.json"
+  "settings": "RehearsalMod.plugin.json"
 }
